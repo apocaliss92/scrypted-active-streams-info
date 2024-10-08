@@ -1,5 +1,5 @@
 {
-   "name": "@scrypted/active-streams-info",
+   "name": "@apocaliss92/scrypted-active-streams-info",
    "version": "0.0.1",
    "scripts": {
       "scrypted-setup-project": "scrypted-setup-project",
