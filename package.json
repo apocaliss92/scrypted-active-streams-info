@@ -1,6 +1,6 @@
 {
    "name": "@apocaliss92/scrypted-active-streams-info",
-   "version": "0.0.1",
+   "version": "0.0.2",
    "scripts": {
       "scrypted-setup-project": "scrypted-setup-project",
       "prescrypted-setup-project": "scrypted-package-json",
@@ -14,7 +14,13 @@
       "scrypted-readme": "scrypted-readme",
       "scrypted-package-json": "scrypted-package-json"
    },
-   "keywords": ["scrypted", "plugin"],
+   "keywords": [
+      "scrypted",
+      "plugin",
+      "active",
+      "streams",
+      "track"
+   ],
    "scrypted": {
       "name": "Active streams info",
       "type": "API",

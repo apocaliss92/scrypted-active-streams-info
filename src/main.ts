@@ -1,5 +1,5 @@
 import sdk, { ScryptedDeviceBase, ScryptedInterface, Setting, Settings } from "@scrypted/sdk";
-import { camerasKey, peopleKey, intervalIdKey, ipsKey, mqttHostKey, mqttUsernameKey, mqttPasswordKey, KnownPersonResult, StreamInfo } from "./types";
+import { camerasKey, peopleKey, intervalIdKey, ipsKey, mqttHostKey, mqttUsernameKey, mqttPasswordKey, KnownPersonResult, StreamInfo, CameraData } from "./types";
 import { connect, Client } from 'mqtt';
 
 const { systemManager } = sdk;
@@ -101,6 +101,44 @@ export default class ActiveStreamsConfig extends ScryptedDeviceBase implements S
         return { camera: setting.group, ip };
     }
 
+    private getMqttTopics({ cameraId, name }: { cameraId?: string, name?: string }) {
+        let sensorTopic: string;
+        let sensorInfoTopic: string;
+        let autodiscoveryTopic: string;
+
+        if (cameraId && !name) {
+            sensorTopic = `scrypted/activeStreams/${cameraId}`;
+            autodiscoveryTopic = `homeassistant/sensor/scrypted-active-streams-${cameraId}/ActiveStreams/config`;
+        } else if (name && !cameraId) {
+            sensorTopic = `scrypted/activeStreams/${name}`;
+            autodiscoveryTopic = `homeassistant/sensor/scrypted-active-stream-${name}/ActiveStream/config`;
+        } else if (name && cameraId) {
+            sensorTopic = `scrypted/activeStreams/${cameraId}/${name}`;
+            autodiscoveryTopic = `homeassistant/binary_sensor/scrypted-active-stream-${cameraId}-${name}/ActiveStream/config`;
+        } else {
+            sensorTopic = `scrypted/activeStreams`;
+            autodiscoveryTopic = `homeassistant/sensor/scrypted-active-streams/ActiveStreams/config`;
+        }
+
+        sensorInfoTopic = `${sensorTopic}/info`;
+
+        return {
+            sensorTopic,
+            sensorInfoTopic,
+            autodiscoveryTopic
+        }
+    }
+
+    private processMqttData({ cameraId, name, value, info }: { cameraId?: string, name?: string, value: any, info: any }) {
+        const { sensorTopic, sensorInfoTopic } = this.getMqttTopics({ cameraId, name });
+        const lastValue = this.lastSetMap[sensorTopic];
+        if (lastValue !== value) {
+            this.publish(sensorTopic, value);
+            this.publish(sensorInfoTopic, info);
+            this.lastSetMap[sensorTopic] = value;
+        }
+    }
+
     async processCamera(cameraId: string, settings: Setting[], activeStreamsConfigs: Setting[], isWhitelisted: boolean, knownPeople: string[]) {
         const camera = systemManager.getDeviceById(cameraId);
         const cameraName = camera.name;
@@ -125,29 +163,88 @@ export default class ActiveStreamsConfig extends ScryptedDeviceBase implements S
 
             if (isWhitelisted) {
                 const isPersonActive = !!personActiveStreams.length;
-                const isPersonActiveStreamTopic = `scrypted/activeStreams/${cameraId}/${name}`;
-                const personStreamsInfoTopic = `${isPersonActiveStreamTopic}/info`;
-                const lastIsPersonActiveStreamsSet = this.lastSetMap[isPersonActiveStreamTopic];
-                if (lastIsPersonActiveStreamsSet !== isPersonActive) {
-                    this.publish(isPersonActiveStreamTopic, isPersonActive);
-                    this.publish(personStreamsInfoTopic, { streams: personActiveStreams });
-                    this.lastSetMap[isPersonActiveStreamTopic] = isPersonActive;
-                }
+                this.processMqttData({ cameraId, name, value: isPersonActive, info: { streams: personActiveStreams } });
             }
         }
 
         if (isWhitelisted) {
-            const activeStreamsTopic = `scrypted/activeStreams/${cameraId}`;
-            const activeStreamsInfoTopic = `${activeStreamsTopic}/info`;
-            const lastActiveStreamsSet = this.lastSetMap[activeStreamsTopic];
-            if (lastActiveStreamsSet !== activeClients) {
-                this.publish(activeStreamsTopic, activeClients);
-                this.publish(activeStreamsInfoTopic, { streams: knownPeopleResult.flatMap(elem => elem.settings) });
-                this.lastSetMap[activeStreamsTopic] = activeClients;
-            }
+            this.processMqttData({ cameraId, value: activeClients, info: { streams: knownPeopleResult.flatMap(elem => elem.settings) } });
         }
 
         return { activeClients, knownPeopleResult, cameraName };
+    }
+
+    private processMqttAutodiscovery(cameraData: CameraData[], whitelistedCameraIds: string[], knownPeople: string[]) {
+        if (!this.autodiscoveryPublished) {
+            for (const data of cameraData) {
+                const { id: cameraId, name: cameraName } = data;
+                if (whitelistedCameraIds.includes(cameraId)) {
+                    for (const name of knownPeople) {
+                        const { sensorTopic, autodiscoveryTopic, sensorInfoTopic } = this.getMqttTopics({ cameraId, name });
+                        const config = {
+                            state_topic: sensorTopic,
+                            json_attributes_topic: sensorInfoTopic,
+                            json_attributes_template: '{{ value_json | tojson }}',
+                            payload_on: 'true',
+                            payload_off: 'false',
+                            dev: {
+                                ids: `scrypted-activeStream-${cameraId}-${name}`,
+                                name: `Active stream for ${cameraName} ${name}`
+                            },
+                            unique_id: `scrypted-active-stream-${cameraId}-${name}`,
+                            name: `${cameraName} ${name} active`,
+                        };
+                        this.publish(autodiscoveryTopic, JSON.stringify(config));
+                    }
+
+                    const { sensorTopic, autodiscoveryTopic, sensorInfoTopic } = this.getMqttTopics({ cameraId });
+                    const config = {
+                        state_topic: sensorTopic,
+                        json_attributes_topic: sensorInfoTopic,
+                        json_attributes_template: '{{ value_json | tojson }}',
+                        dev: {
+                            ids: `scrypted-activeStreams-${cameraId}`,
+                            name: `Active streams for ${cameraName}`
+                        },
+                        unique_id: `scrypted-active-streams-${cameraId}`,
+                        name: `${cameraName} active streams`,
+                    };
+                    this.publish(autodiscoveryTopic, JSON.stringify(config));
+                }
+            }
+
+            for (const name of knownPeople) {
+                const { sensorTopic, autodiscoveryTopic, sensorInfoTopic } = this.getMqttTopics({ name });
+                const config = {
+                    state_topic: sensorTopic,
+                    json_attributes_topic: sensorInfoTopic,
+                    json_attributes_template: '{{ value_json | tojson }}',
+                    dev: {
+                        ids: `scrypted-activeStreams-${name}`,
+                        name: `Active streams for ${name}`
+                    },
+                    unique_id: `scrypted-active-streams-${name}`,
+                    name: `${name} active streams`,
+                };
+                this.publish(autodiscoveryTopic, JSON.stringify(config));
+            }
+
+            const { sensorTopic, autodiscoveryTopic, sensorInfoTopic } = this.getMqttTopics({});
+            const config = {
+                state_topic: sensorTopic,
+                json_attributes_topic: sensorInfoTopic,
+                json_attributes_template: '{{ value_json | tojson }}',
+                dev: {
+                    ids: `scrypted-activeStreams`,
+                    name: `Active streams`
+                },
+                unique_id: `scrypted-active-streams`,
+                name: `All active streams`,
+            };
+            this.publish(autodiscoveryTopic, JSON.stringify(config));
+
+            this.autodiscoveryPublished = true;
+        }
     }
 
     async start() {
@@ -174,7 +271,7 @@ export default class ActiveStreamsConfig extends ScryptedDeviceBase implements S
                     }
                 })
 
-                const cameraData: { id: string, name: string, activeStreams: number }[] = [];
+                const cameraData: CameraData[] = [];
                 const peopleData: { [person: string]: StreamInfo[] } = {};
 
                 if (currentIntervalId && currentIntervalId > this.intervalId || !cameraIds || cameraIds.length === 0) {
@@ -210,105 +307,18 @@ export default class ActiveStreamsConfig extends ScryptedDeviceBase implements S
                     for (const person of knownPeople) {
                         const personStreams = peopleData[person] ?? [];
                         const activeClients = personStreams.length;
-
-                        const activeStreamsTopic = `scrypted/activeStreams/${person}`;
-                        const activeStreamsInfoTopic = `${activeStreamsTopic}/info`;
-                        const lastActiveStreamsSet = this.lastSetMap[activeStreamsTopic];
-                        if (lastActiveStreamsSet !== activeClients) {
-                            this.publish(activeStreamsTopic, activeClients);
-                            this.publish(activeStreamsInfoTopic, { streams: personStreams });
-                            this.lastSetMap[activeStreamsTopic] = activeClients;
-                        }
+                        this.processMqttData({ name: person, value: activeClients, info: { streams: personStreams } });
                     }
 
-                    const totalActiveStreamsTopic = `scrypted/activeStreams`;
-                    const totalActiveStreamsInfoTopic = `${totalActiveStreamsTopic}/info`;
-                    const lastTotalActiveStreamsSet = this.lastSetMap[totalActiveStreamsTopic];
-                    if (lastTotalActiveStreamsSet !== totalActiveStreams) {
-                        this.publish(totalActiveStreamsTopic, totalActiveStreams);
-                        this.publish(totalActiveStreamsInfoTopic, 
-                            { 
-                                streams: settings
+                    this.processMqttData({
+                        value: totalActiveStreams, info: {
+                            streams: settings
                                 .filter(setting => setting.key === 'type')
-                                .map(this.mapToStreamInfo) 
-                            });
-                        this.lastSetMap[totalActiveStreamsTopic] = totalActiveStreams;
-                    }
-
-                    if (!this.autodiscoveryPublished) {
-                        for (const data of cameraData) {
-                            const { id: cameraId, name: cameraName } = data;
-                            if (whitelistedCameraIds.includes(cameraId)) {
-                                for (const name of knownPeople) {
-                                    const configTopic = `homeassistant/binary_sensor/scrypted-active-stream-${cameraId}-${name}/ActiveStream/config`;
-                                    const stateTopic = `scrypted/activeStreams/${cameraId}/${name}`;
-                                    const config = {
-                                        state_topic: stateTopic,
-                                        json_attributes_topic: `${stateTopic}/info`,
-                                        json_attributes_template: '{{ value_json | tojson }}',
-                                        payload_on: 'true',
-                                        payload_off: 'false',
-                                        dev: {
-                                            ids: `scrypted-activeStream-${cameraId}-${name}`,
-                                            name: `Active stream for ${cameraName} ${name}`
-                                        },
-                                        unique_id: `scrypted-active-stream-${cameraId}-${name}`,
-                                        name: `${cameraName} ${name} active`,
-                                    };
-                                    this.publish(configTopic, JSON.stringify(config));
-                                }
-
-                                const configTopic = `homeassistant/sensor/scrypted-active-streams-${cameraId}/ActiveStreams/config`;
-                                const stateTopic = `scrypted/activeStreams/${cameraId}`;
-                                const config = {
-                                    state_topic: stateTopic,
-                                    json_attributes_topic: `${stateTopic}/info`,
-                                    json_attributes_template: '{{ value_json | tojson }}',
-                                    dev: {
-                                        ids: `scrypted-activeStreams-${cameraId}`,
-                                        name: `Active streams for ${cameraName}`
-                                    },
-                                    unique_id: `scrypted-active-streams-${cameraId}`,
-                                    name: `${cameraName} active streams`,
-                                };
-                                this.publish(configTopic, JSON.stringify(config));
-                            }
+                                .map(this.mapToStreamInfo)
                         }
+                    });
 
-                        for (const name of knownPeople) {
-                            const configTopic = `homeassistant/sensor/scrypted-active-stream-${name}/ActiveStream/config`;
-                            const stateTopic = `scrypted/activeStreams/${name}`;
-                            const config = {
-                                state_topic: stateTopic,
-                                json_attributes_topic: `${stateTopic}/info`,
-                                json_attributes_template: '{{ value_json | tojson }}',
-                                dev: {
-                                    ids: `scrypted-activeStreams-${name}`,
-                                    name: `Active streams for ${name}`
-                                },
-                                unique_id: `scrypted-active-streams-${name}`,
-                                name: `${name} active streams`,
-                            };
-                            this.publish(configTopic, JSON.stringify(config));
-                        }
-
-                        const configTopic = `homeassistant/sensor/scrypted-active-streams/ActiveStreams/config`;
-                        const stateTopic = `scrypted/activeStreams`;
-                        const config = {
-                            state_topic: stateTopic,
-                            json_attributes_topic: `${stateTopic}/info`,
-                            json_attributes_template: '{{ value_json | tojson }}',
-                            dev: {
-                                ids: `scrypted-activeStreams`,
-                                name: `Active streams`
-                            },
-                            unique_id: `scrypted-active-streams`,
-                            name: `All active streams`,
-                        };
-                        this.publish(configTopic, JSON.stringify(config));
-
-                        this.autodiscoveryPublished = true;
-                    }
+                    this.processMqttAutodiscovery(cameraData, whitelistedCameraIds, knownPeople)
                 }
             } catch (e) {
                 clearInterval(currentInterval);
@@ -324,7 +334,7 @@ export default class ActiveStreamsConfig extends ScryptedDeviceBase implements S
             urlWithoutPath.pathname = '';
 
             this.mqttPathmame = urlWithoutPath.toString();
-            if(!this.mqttPathmame.endsWith('/')) {
+            if (!this.mqttPathmame.endsWith('/')) {
                 this.mqttPathmame = `${this.mqttPathmame}/`;
             }
             this.mqttClient = connect(this.mqttPathmame, {
@@ -347,7 +357,7 @@ export default class ActiveStreamsConfig extends ScryptedDeviceBase implements S
             value = JSON.stringify(value);
         if (value.constructor.name !== Buffer.name)
             value = value.toString();
-        
+
         this.console.log(`Publishing ${value} to ${topic}`);
         (await this.getMqttClient()).publish(topic, value, { retain: true });
     }

@@ -13,8 +13,9 @@ export interface StreamInfo {
 
 export interface KnownPersonResult {
     cameraName: string,
-    cameraId: string, 
-    person: string, 
+    cameraId: string,
+    person: string,
     settings: StreamInfo[]
-  }
+}
 
+export interface CameraData { id: string, name: string, activeStreams: number }
