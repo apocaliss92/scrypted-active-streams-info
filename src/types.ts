@@ -1,4 +1,3 @@
-export const intervalIdKey = 'activeStreamsIntervalId';
 export const camerasKey = 'activeStreamsCameras';
 export const peopleKey = 'activeStreamsPeople';
 export const ipsKey = 'activeStreamsIps';

@@ -1,5 +1,5 @@
 import sdk, { ScryptedDeviceBase, ScryptedInterface, Setting, Settings } from "@scrypted/sdk";
-import { camerasKey, peopleKey, intervalIdKey, ipsKey, mqttHostKey, mqttUsernameKey, mqttPasswordKey, KnownPersonResult, StreamInfo, CameraData } from "./types";
+import { camerasKey, peopleKey, ipsKey, mqttHostKey, mqttUsernameKey, mqttPasswordKey, KnownPersonResult, StreamInfo, CameraData } from "./types";
 import { connect, Client } from 'mqtt';
 
 const { systemManager } = sdk;
@@ -7,7 +7,6 @@ const { systemManager } = sdk;
 export default class ActiveStreamsConfig extends ScryptedDeviceBase implements Settings {
     mqttClient: Client;
     lastSetMap: { [topic: string]: any } = {};
-    intervalId = new Date().getTime();
     autodiscoveryPublished = false;
     mqttPathmame: string;
 
@@ -23,13 +22,6 @@ export default class ActiveStreamsConfig extends ScryptedDeviceBase implements S
         const currentPeople = currentPeopleRaw ? currentPeopleRaw.split(',') : []
 
         const settings: Setting[] = [
-            {
-                key: intervalIdKey,
-                type: 'string',
-                title: 'Interval ID',
-                readonly: true,
-                value: this.storage.getItem(intervalIdKey)
-            },
             {
                 title: 'Host',
                 group: 'MQTT',
@@ -249,7 +241,6 @@ export default class ActiveStreamsConfig extends ScryptedDeviceBase implements S
 
     async start() {
         this.getMqttClient();
-        await this.putSetting(intervalIdKey, JSON.stringify(this.intervalId));
 
         const currentInterval = setInterval(async () => {
             try {
@@ -259,7 +250,6 @@ export default class ActiveStreamsConfig extends ScryptedDeviceBase implements S
 
                 const activeStreamsConfigs = await this.getSettings();
                 //this.console.log(`Active streams configs: ${JSON.stringify(activeStreamsConfigs, undefined, 2)}`);
-                const currentIntervalId = Number(activeStreamsConfigs.find(setting => setting.key === intervalIdKey)?.value);
                 const whitelistedCameraIds = (activeStreamsConfigs.find(setting => setting.key === camerasKey)?.value as string[]);
                 const knownPeople = (activeStreamsConfigs.find(setting => setting.key === peopleKey)?.value ?? []) as string[];
 
@@ -274,52 +264,47 @@ export default class ActiveStreamsConfig extends ScryptedDeviceBase implements S
                 const cameraData: CameraData[] = [];
                 const peopleData: { [person: string]: StreamInfo[] } = {};
 
-                if (currentIntervalId && currentIntervalId > this.intervalId || !cameraIds || cameraIds.length === 0) {
-                    this.console.log('Clearing interval because newer script is running');
-                    clearInterval(currentInterval);
-                } else {
-                    let totalActiveStreams = 0;
-                    const totalKnownPeopleResult: KnownPersonResult[] = [];
+                let totalActiveStreams = 0;
+                const totalKnownPeopleResult: KnownPersonResult[] = [];
 
-                    const adaptivePlugin = systemManager.getDeviceByName('Adaptive Streaming') as unknown as (Settings);
-                    const settings = await adaptivePlugin.getSettings();
+                const adaptivePlugin = systemManager.getDeviceByName('Adaptive Streaming') as unknown as (Settings);
+                const settings = await adaptivePlugin.getSettings();
 
-                    this.console.log(`All settings: ${JSON.stringify(settings, undefined, 2)}`);
+                this.console.log(`All settings: ${JSON.stringify(settings, undefined, 2)}`);
 
-                    for (const cameraId of cameraIds) {
-                        const isWhitelisted = whitelistedCameraIds.includes(cameraId);
-                        const { activeClients, knownPeopleResult, cameraName } = await this.processCamera(cameraId, settings, activeStreamsConfigs, isWhitelisted, knownPeople);
-                        totalActiveStreams += activeClients;
-                        totalKnownPeopleResult.push(...knownPeopleResult);
+                for (const cameraId of cameraIds) {
+                    const isWhitelisted = whitelistedCameraIds.includes(cameraId);
+                    const { activeClients, knownPeopleResult, cameraName } = await this.processCamera(cameraId, settings, activeStreamsConfigs, isWhitelisted, knownPeople);
+                    totalActiveStreams += activeClients;
+                    totalKnownPeopleResult.push(...knownPeopleResult);
 
-                        knownPeopleResult.forEach(elem => {
-                            const { person, settings } = elem;
-                            if (!peopleData[person]) {
-                                peopleData[person] = [];
-                            }
-
-                            peopleData[person].push(...settings);
-                        });
-
-                        cameraData.push({ name: cameraName, id: cameraId, activeStreams: activeClients });
-                    }
-
-                    for (const person of knownPeople) {
-                        const personStreams = peopleData[person] ?? [];
-                        const activeClients = personStreams.length;
-                        this.processMqttData({ name: person, value: activeClients, info: { streams: personStreams } });
-                    }
-
-                    this.processMqttData({
-                        value: totalActiveStreams, info: {
-                            streams: settings
-                                .filter(setting => setting.key === 'type')
-                                .map(this.mapToStreamInfo)
+                    knownPeopleResult.forEach(elem => {
+                        const { person, settings } = elem;
+                        if (!peopleData[person]) {
+                            peopleData[person] = [];
                         }
+
+                        peopleData[person].push(...settings);
                     });
 
-                    this.processMqttAutodiscovery(cameraData, whitelistedCameraIds, knownPeople)
+                    cameraData.push({ name: cameraName, id: cameraId, activeStreams: activeClients });
                 }
+
+                for (const person of knownPeople) {
+                    const personStreams = peopleData[person] ?? [];
+                    const activeClients = personStreams.length;
+                    this.processMqttData({ name: person, value: activeClients, info: { streams: personStreams } });
+                }
+
+                this.processMqttData({
+                    value: totalActiveStreams, info: {
+                        streams: settings
+                            .filter(setting => setting.key === 'type')
+                            .map(this.mapToStreamInfo)
+                    }
+                });
+
+                this.processMqttAutodiscovery(cameraData, whitelistedCameraIds, knownPeople)
             } catch (e) {
                 clearInterval(currentInterval);
                 this.console.log(e);
