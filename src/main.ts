@@ -242,7 +242,7 @@ export default class ActiveStreamsConfig extends ScryptedDeviceBase implements S
     async start() {
         this.getMqttClient();
 
-        const currentInterval = setInterval(async () => {
+        setInterval(async () => {
             try {
                 if (!this.mqttClient || !this.mqttClient.connected) {
                     return;
@@ -306,7 +306,6 @@ export default class ActiveStreamsConfig extends ScryptedDeviceBase implements S
 
                 this.processMqttAutodiscovery(cameraData, whitelistedCameraIds, knownPeople)
             } catch (e) {
-                clearInterval(currentInterval);
                 this.console.log(e);
             }
         }, 10000);
