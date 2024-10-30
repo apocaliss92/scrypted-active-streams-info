@@ -9,4 +9,6 @@ The MQTT entities will be auto discovered by homeassistant and will be the follo
 - 1 entity for each person tracked (Active streams for {Person name}) - number sensor
 - 1 entity for each combination of camera/person tracked (Active stream for {Camera name} {Person name}) - binary sensor (shows if the camera is active for the specific person)
 
-All the entities will have as attribute the relevant streams information
+All the entities will have as attribute the relevant streams information and will be placed in only 1 sensor
+
+Updating from 0.0.5 please cleanup all the MQTT devices, there will be only 1 now

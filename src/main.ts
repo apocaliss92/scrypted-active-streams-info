@@ -4,6 +4,11 @@ import { connect, Client } from 'mqtt';
 
 const { systemManager } = sdk;
 
+const mqttDevice = {
+    ids: `scrypted-activeStream`,
+    name: `Active stream`
+}
+
 export default class ActiveStreamsConfig extends ScryptedDeviceBase implements Settings {
     mqttClient: Client;
     lastSetMap: { [topic: string]: any } = {};
@@ -179,10 +184,7 @@ export default class ActiveStreamsConfig extends ScryptedDeviceBase implements S
                             json_attributes_template: '{{ value_json | tojson }}',
                             payload_on: 'true',
                             payload_off: 'false',
-                            dev: {
-                                ids: `scrypted-activeStream-${cameraId}-${name}`,
-                                name: `Active stream for ${cameraName} ${name}`
-                            },
+                            dev: mqttDevice,
                             unique_id: `scrypted-active-stream-${cameraId}-${name}`,
                             name: `${cameraName} ${name} active`,
                         };
@@ -194,10 +196,7 @@ export default class ActiveStreamsConfig extends ScryptedDeviceBase implements S
                         state_topic: sensorTopic,
                         json_attributes_topic: sensorInfoTopic,
                         json_attributes_template: '{{ value_json | tojson }}',
-                        dev: {
-                            ids: `scrypted-activeStreams-${cameraId}`,
-                            name: `Active streams for ${cameraName}`
-                        },
+                        dev: mqttDevice,
                         unique_id: `scrypted-active-streams-${cameraId}`,
                         name: `${cameraName} active streams`,
                     };
@@ -211,10 +210,7 @@ export default class ActiveStreamsConfig extends ScryptedDeviceBase implements S
                     state_topic: sensorTopic,
                     json_attributes_topic: sensorInfoTopic,
                     json_attributes_template: '{{ value_json | tojson }}',
-                    dev: {
-                        ids: `scrypted-activeStreams-${name}`,
-                        name: `Active streams for ${name}`
-                    },
+                    dev: mqttDevice,
                     unique_id: `scrypted-active-streams-${name}`,
                     name: `${name} active streams`,
                 };
@@ -226,10 +222,7 @@ export default class ActiveStreamsConfig extends ScryptedDeviceBase implements S
                 state_topic: sensorTopic,
                 json_attributes_topic: sensorInfoTopic,
                 json_attributes_template: '{{ value_json | tojson }}',
-                dev: {
-                    ids: `scrypted-activeStreams`,
-                    name: `Active streams`
-                },
+                dev: mqttDevice,
                 unique_id: `scrypted-active-streams`,
                 name: `All active streams`,
             };
