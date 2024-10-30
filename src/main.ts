@@ -6,7 +6,7 @@ const { systemManager } = sdk;
 
 const mqttDevice = {
     ids: `scrypted-activeStream`,
-    name: `Active stream`
+    name: `Scrypted Active streams info`
 }
 
 export default class ActiveStreamsConfig extends ScryptedDeviceBase implements Settings {
