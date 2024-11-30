@@ -1,6 +1,7 @@
-import sdk, { ScryptedDeviceBase, ScryptedInterface, Setting, Settings } from "@scrypted/sdk";
-import { camerasKey, peopleKey, ipsKey, mqttHostKey, mqttUsernameKey, mqttPasswordKey, KnownPersonResult, StreamInfo, CameraData } from "./types";
-import { connect, Client } from 'mqtt';
+import sdk, { ScryptedInterface, Setting, Settings, SettingValue } from "@scrypted/sdk";
+import { ipsKey, KnownPersonResult, StreamInfo, CameraData } from "./types";
+import { BasePlugin, getBaseSettings } from '../../scrypted-apocaliss-base/src/basePlugin';
+import { StorageSettings } from "@scrypted/sdk/storage-settings";
 
 const { systemManager } = sdk;
 
@@ -9,69 +10,56 @@ const mqttDevice = {
     name: `Scrypted Active streams info`
 }
 
-export default class ActiveStreamsConfig extends ScryptedDeviceBase implements Settings {
-    mqttClient: Client;
+export default class ActiveStreamsConfig extends BasePlugin implements Settings {
     lastSetMap: { [topic: string]: any } = {};
     autodiscoveryPublished = false;
-    mqttPathmame: string;
+
+    storageSettings = new StorageSettings(this, {
+        ...getBaseSettings({
+            onPluginSwitch: (_, enabled) => this.startStop(enabled),
+        }),
+        cameras: {
+            type: 'device',
+            title: 'Cameras',
+            multiple: true,
+            deviceFilter: `interfaces.includes("${ScryptedInterface.VideoCamera}")`,
+            defaultValue: []
+        },
+        people: {
+            type: 'string',
+            title: 'People',
+            multiple: true,
+            choices: [],
+            combobox: true,
+            defaultValue: []
+        }
+    });
 
     constructor(nativeId: string) {
-        super(nativeId);
+        super(nativeId, {
+            pluginFriendlyName: 'Active streams info',
+        });
 
         this.start().catch(e => this.console.log(e));
     }
 
+    async startStop(enabled: boolean) {
+        if (enabled) {
+            await this.start();
+        } else {
+            // await this.stop(true);
+        }
+    }
+
     async getSettings(): Promise<Setting[]> {
-        const currentCameras = this.storage.getItem(camerasKey);
-        const currentPeopleRaw = this.storage.getItem(peopleKey);
-        const currentPeople = currentPeopleRaw ? currentPeopleRaw.split(',') : []
 
-        const settings: Setting[] = [
-            {
-                title: 'Host',
-                group: 'MQTT',
-                key: mqttHostKey,
-                description: 'Specify the mqtt address.',
-                placeholder: 'mqtt://192.168.1.100',
-                value: this.storage.getItem(mqttHostKey)
-            },
-            {
-                title: 'Username',
-                group: 'MQTT',
-                key: mqttUsernameKey,
-                description: 'Specify the mqtt username.',
-                value: this.storage.getItem(mqttUsernameKey)
-            },
-            {
-                title: 'Password',
-                group: 'MQTT',
-                key: mqttPasswordKey,
-                description: 'Specify the mqtt password.',
-                type: 'password',
-                value: this.storage.getItem(mqttPasswordKey)
-            },
-            {
-                group: 'Tracked entities',
-                key: camerasKey,
-                type: 'device',
-                title: 'Cameras',
-                multiple: true,
-                deviceFilter: `interfaces.includes("${ScryptedInterface.VideoCamera}")`,
-                value: currentCameras ? currentCameras.split(',') : [],
-            },
-            {
-                group: 'Tracked entities',
-                key: peopleKey,
-                type: 'string',
-                title: 'People',
-                multiple: true,
-                value: currentPeople,
-            }
-        ];
+        const { people } = this.storageSettings.values;
+        const settings: Setting[] = await this.storageSettings.getSettings();
 
-        currentPeople.forEach(person => {
+        people.forEach(person => {
             const personIpsKey = `${ipsKey}:${person}`;
-            const currentIps = this.storage.getItem(personIpsKey);
+            const currentIps = this.storageSettings.getItem(personIpsKey as any);
+            this.console.log('CURRENT IPS', currentIps, typeof currentIps);
             settings.push({
                 group: 'Tracked entities',
                 key: personIpsKey,
@@ -79,16 +67,11 @@ export default class ActiveStreamsConfig extends ScryptedDeviceBase implements S
                 type: 'string',
                 title: `IPs`,
                 multiple: true,
-                value: currentIps ? currentIps.split(',') : [],
+                value: JSON.parse(currentIps ?? '[]')
             })
         });
 
         return settings;
-    }
-
-    async putSetting(key: string, value: string) {
-        this.storage.setItem(key, value.toString());
-        this.onDeviceEvent(ScryptedInterface.Settings, undefined);
     }
 
     mapToStreamInfo(setting: Setting) {
@@ -126,12 +109,12 @@ export default class ActiveStreamsConfig extends ScryptedDeviceBase implements S
         }
     }
 
-    private processMqttData({ cameraId, name, value, info }: { cameraId?: string, name?: string, value: any, info: any }) {
+    private async processMqttData({ cameraId, name, value, info }: { cameraId?: string, name?: string, value: any, info: any }) {
         const { sensorTopic, sensorInfoTopic } = this.getMqttTopics({ cameraId, name });
         const lastValue = this.lastSetMap[sensorTopic];
         if (lastValue !== value) {
-            this.publish(sensorTopic, value);
-            this.publish(sensorInfoTopic, info);
+            await this.mqttClient.publish(sensorTopic, value);
+            await this.mqttClient.publish(sensorInfoTopic, JSON.stringify(info));
             this.lastSetMap[sensorTopic] = value;
         }
     }
@@ -160,18 +143,18 @@ export default class ActiveStreamsConfig extends ScryptedDeviceBase implements S
 
             if (isWhitelisted) {
                 const isPersonActive = !!personActiveStreams.length;
-                this.processMqttData({ cameraId, name, value: isPersonActive, info: { streams: personActiveStreams } });
+                await this.processMqttData({ cameraId, name, value: isPersonActive, info: { streams: personActiveStreams } });
             }
         }
 
         if (isWhitelisted) {
-            this.processMqttData({ cameraId, value: activeClients, info: { streams: knownPeopleResult.flatMap(elem => elem.settings) } });
+            await this.processMqttData({ cameraId, value: activeClients, info: { streams: knownPeopleResult.flatMap(elem => elem.settings) } });
         }
 
         return { activeClients, knownPeopleResult, cameraName };
     }
 
-    private processMqttAutodiscovery(cameraData: CameraData[], whitelistedCameraIds: string[], knownPeople: string[]) {
+    private async processMqttAutodiscovery(cameraData: CameraData[], whitelistedCameraIds: string[], knownPeople: string[]) {
         if (!this.autodiscoveryPublished) {
             for (const data of cameraData) {
                 const { id: cameraId, name: cameraName } = data;
@@ -188,7 +171,7 @@ export default class ActiveStreamsConfig extends ScryptedDeviceBase implements S
                             unique_id: `scrypted-active-stream-${cameraId}-${name}`,
                             name: `${cameraName} ${name} active`,
                         };
-                        this.publish(autodiscoveryTopic, JSON.stringify(config));
+                        await this.mqttClient.publish(autodiscoveryTopic, JSON.stringify(config));
                     }
 
                     const { sensorTopic, autodiscoveryTopic, sensorInfoTopic } = this.getMqttTopics({ cameraId });
@@ -200,7 +183,7 @@ export default class ActiveStreamsConfig extends ScryptedDeviceBase implements S
                         unique_id: `scrypted-active-streams-${cameraId}`,
                         name: `${cameraName} active streams`,
                     };
-                    this.publish(autodiscoveryTopic, JSON.stringify(config));
+                    await this.mqttClient.publish(autodiscoveryTopic, JSON.stringify(config));
                 }
             }
 
@@ -214,7 +197,7 @@ export default class ActiveStreamsConfig extends ScryptedDeviceBase implements S
                     unique_id: `scrypted-active-streams-${name}`,
                     name: `${name} active streams`,
                 };
-                this.publish(autodiscoveryTopic, JSON.stringify(config));
+                await this.mqttClient.publish(autodiscoveryTopic, JSON.stringify(config));
             }
 
             const { sensorTopic, autodiscoveryTopic, sensorInfoTopic } = this.getMqttTopics({});
@@ -226,7 +209,7 @@ export default class ActiveStreamsConfig extends ScryptedDeviceBase implements S
                 unique_id: `scrypted-active-streams`,
                 name: `All active streams`,
             };
-            this.publish(autodiscoveryTopic, JSON.stringify(config));
+            await this.mqttClient.publish(autodiscoveryTopic, JSON.stringify(config));
 
             this.autodiscoveryPublished = true;
         }
@@ -235,16 +218,18 @@ export default class ActiveStreamsConfig extends ScryptedDeviceBase implements S
     async start() {
         this.getMqttClient();
 
+        // const objDetectionPlugin = systemManager.getDeviceByName('Scrypted NVR Object Detection') as unknown as Settings;
+        // const settings = await objDetectionPlugin.getSettings();
+        // const knownPeople = settings?.find(setting => setting.key === 'knownPeople')?.choices
+        //     ?.filter(choice => !!choice);
+        // this.storageSettings.settings.people.choices = knownPeople;
+
         setInterval(async () => {
             try {
-                if (!this.mqttClient || !this.mqttClient.connected) {
-                    return;
-                }
 
+                const { cameras, people } = this.storageSettings.values;
                 const activeStreamsConfigs = await this.getSettings();
                 //this.console.log(`Active streams configs: ${JSON.stringify(activeStreamsConfigs, undefined, 2)}`);
-                const whitelistedCameraIds = (activeStreamsConfigs.find(setting => setting.key === camerasKey)?.value as string[]);
-                const knownPeople = (activeStreamsConfigs.find(setting => setting.key === peopleKey)?.value ?? []) as string[];
 
                 const cameraIds: string[] = [];
 
@@ -266,8 +251,8 @@ export default class ActiveStreamsConfig extends ScryptedDeviceBase implements S
                 this.console.log(`All settings: ${JSON.stringify(settings, undefined, 2)}`);
 
                 for (const cameraId of cameraIds) {
-                    const isWhitelisted = whitelistedCameraIds.includes(cameraId);
-                    const { activeClients, knownPeopleResult, cameraName } = await this.processCamera(cameraId, settings, activeStreamsConfigs, isWhitelisted, knownPeople);
+                    const isWhitelisted = cameras.includes(cameraId);
+                    const { activeClients, knownPeopleResult, cameraName } = await this.processCamera(cameraId, settings, activeStreamsConfigs, isWhitelisted, people);
                     totalActiveStreams += activeClients;
                     totalKnownPeopleResult.push(...knownPeopleResult);
 
@@ -283,7 +268,7 @@ export default class ActiveStreamsConfig extends ScryptedDeviceBase implements S
                     cameraData.push({ name: cameraName, id: cameraId, activeStreams: activeClients });
                 }
 
-                for (const person of knownPeople) {
+                for (const person of people) {
                     const personStreams = peopleData[person] ?? [];
                     const activeClients = personStreams.length;
                     this.processMqttData({ name: person, value: activeClients, info: { streams: personStreams } });
@@ -297,45 +282,10 @@ export default class ActiveStreamsConfig extends ScryptedDeviceBase implements S
                     }
                 });
 
-                this.processMqttAutodiscovery(cameraData, whitelistedCameraIds, knownPeople)
+                this.processMqttAutodiscovery(cameraData, cameras, people)
             } catch (e) {
                 this.console.log(e);
             }
         }, 10000);
-    }
-
-    async getMqttClient() {
-        if (!this.mqttClient) {
-            const url = this.storage.getItem(mqttHostKey);
-            const urlWithoutPath = new URL(url);
-            urlWithoutPath.pathname = '';
-
-            this.mqttPathmame = urlWithoutPath.toString();
-            if (!this.mqttPathmame.endsWith('/')) {
-                this.mqttPathmame = `${this.mqttPathmame}/`;
-            }
-            this.mqttClient = connect(this.mqttPathmame, {
-                rejectUnauthorized: false,
-                username: this.storage.getItem(mqttUsernameKey) || undefined,
-                password: this.storage.getItem(mqttPasswordKey) || undefined,
-            });
-            this.mqttClient.setMaxListeners(Infinity);
-
-            this.mqttClient.on('connect', packet => {
-                this.console.log('connected to mqtt', packet);
-            })
-        }
-
-        return this.mqttClient;
-    }
-
-    async publish(topic: string, value: any) {
-        if (typeof value === 'object')
-            value = JSON.stringify(value);
-        if (value.constructor.name !== Buffer.name)
-            value = value.toString();
-
-        this.console.log(`Publishing ${value} to ${topic}`);
-        (await this.getMqttClient()).publish(topic, value, { retain: true });
     }
 }

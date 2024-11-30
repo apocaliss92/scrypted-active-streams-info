@@ -11,4 +11,4 @@ The MQTT entities will be auto discovered by homeassistant and will be the follo
 
 All the entities will have as attribute the relevant streams information and will be placed in only 1 sensor
 
-Updating from 0.0.5 please cleanup all the MQTT devices, there will be only 1 now
+Updating from 0.1.0 a reconfiguration is required, settings keys have been changed

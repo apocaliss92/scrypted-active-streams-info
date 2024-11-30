@@ -1,5 +1,3 @@
-export const camerasKey = 'activeStreamsCameras';
-export const peopleKey = 'activeStreamsPeople';
 export const ipsKey = 'activeStreamsIps';
 export const mqttHostKey = 'activeStreamsMqttHost';
 export const mqttUsernameKey = 'activeStreamsMqttUsername';
