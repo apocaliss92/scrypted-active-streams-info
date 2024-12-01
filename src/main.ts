@@ -52,9 +52,8 @@ export default class ActiveStreamsConfig extends BasePlugin implements Settings 
     }
 
     async getSettings(): Promise<Setting[]> {
-
         const { people } = this.storageSettings.values;
-        const settings: Setting[] = await this.storageSettings.getSettings();
+        const settings: Setting[] = await super.getSettings();
 
         people.forEach(person => {
             const personIpsKey = `${ipsKey}:${person}`;
